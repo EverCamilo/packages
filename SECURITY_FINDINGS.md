@@ -73,6 +73,34 @@ Branch: `cursor/vulnerability-findings-persistence-d267`
 | `packages/metrics_center` | Credentials loaded from local `secret/test_gcp_credentials.json` (not in tree). |
 | `packages/multicast_dns` | DNS compression pointer loop guards present. |
 | Hardcoded secrets | Example Firebase `current_key` entries in `google-services.json` are client API keys (not reported as server secrets). Placeholders like `maps.key=SomeKeyHere` / `???` passwords only. No AWS/GitHub/Slack private key material found. |
+| `packages/webview_flutter/*` | **NONE** for HIGH/CRITICAL with complete attacker chains. See dedicated section below. |
+
+## webview_flutter — NONE (HIGH/CRITICAL)
+
+Scoped hunt of `webview_flutter`, `webview_flutter_android`, `webview_flutter_wkwebview`, `webview_flutter_platform_interface`, and `webview_flutter_web`. No validated HIGH/CRITICAL finding with a complete end-to-end attack path that does not require the app developer to explicitly opt into a dangerous API or implement an insecure handler.
+
+### Surfaces reviewed
+
+| Surface | Result |
+|---------|--------|
+| Android `SecureWebChromeClient.onCreateWindow` / `window.open` | Historical UXSS (`javascript:` into parent) is covered by a regression test (`JavaScript does not run in parent window`). Implementation routes popup navigations through `WebViewClient.shouldOverrideUrlLoading` + optional Dart `onNavigationRequest`; no evidence of a working iframe→parent `javascript:` chain on current WebView. |
+| Android JS defaults | Constructor enables DomStorage, `setJavaScriptCanOpenWindowsAutomatically(true)`, `setSupportMultipleWindows(true)`, but **does not** enable JavaScript until `setJavaScriptMode(unrestricted)`. |
+| Android file / content access | `setAllowFileAccess` / `setAllowContentAccess` / mixed content are platform-default or explicitly opt-in. `loadFile` sets `allowFileAccess(true)` (sticky) — possible later `file://` display via popup→`loadUrl`, but no clean remote exfiltration chain (no universal-file-access settings exposed; network→file XHR/iframe blocked by Chromium). |
+| Android `addJavascriptInterface` | Only `postMessage` is `@JavascriptInterface`-annotated. Channels are opt-in via `addJavaScriptChannel`. No origin/frame allowlist (platform/API limitation); no default privileged channel → not a standalone HIGH library exploit. |
+| Android SSL / geo / permissions / HTTP auth | Default deny/cancel when app callbacks are unset. |
+| Android Intent / custom scheme handling | No `Intent.parseUri` / `startActivity` in the Android plugin; not an intent-launch confused deputy. |
+| iOS/macOS `WKUIDelegate.onCreateWebView` | Loads `target=_blank` / `window.open` into the same WebView; `decidePolicyForNavigationAction` still applies (including on the follow-up `load`). `isMainFrame: false` when `targetFrame` is null is an app-filter footgun, not a library bypass of a documented control. |
+| iOS JS default | If app omits `setJavaScriptMode`, WKWebView keeps platform default (JS on), unlike Android (JS off). Inconsistency/footgun; normal apps following docs enable JS explicitly. |
+| iOS JS channels / user scripts | Wrapper injected with `isForMainFrameOnly: false`; message handlers have no origin check. Same opt-in / missing-origin class as Android — not HIGH without a privileged default sink. Channel name is interpolated into a user script; new API only `assert(name.isNotEmpty)` (legacy had identifier regex) — requires attacker-controlled **channel name** via the Dart API. |
+| Cookies | `getCookies` / `setCookie` are Dart-side only. Third-party cookies default false on Android API. |
+| `webview_flutter_web` | Plain `HTMLIFrameElement`; no JS bridge; `loadHtmlString`/`loadRequest` are developer-supplied content. |
+| Navigation delegates | Filtering is app-authored. Plugin does not claim a default URL allowlist. |
+
+### Why candidates were not reported
+
+- Dangerous capabilities (`runJavaScript`, `addJavaScriptChannel`, `loadFile`, `setMixedContentMode`, `setAllowFileAccess`, SSL `proceed`) are explicit app opt-ins.
+- Missing JS-channel origin validation is a real design gap for apps that both register privileged bridges and embed third-party frames, but the library does not ship a privileged default bridge or bypass a documented origin control — fails the “complete chain without developer opting into the dangerous API” bar for HIGH/CRITICAL.
+- The Android popup path’s “secure URL” naming is aspirational (no scheme allowlist in code); residual risk depends on Chromium navigation behavior and app `onNavigationRequest` policy, not a demonstrated library UXSS today.
 
 ## Secret name locations only (no values)
 
